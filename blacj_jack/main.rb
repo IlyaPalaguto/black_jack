@@ -1,155 +1,129 @@
-require_relative 'actions'
 require_relative 'card_deck'
-require_relative 'croupier'
+require_relative 'dealer'
 require_relative 'player'
-
 class Main
-  attr_reader :user, :active_croupier
 
-  MENU = [
-    {id: 1, title: 'Создать крупье', action: :create_croupier},
-    {id: 2, title: 'Выбрать крупье и сесть за стол', action: :select_table},
-    {id: 3, title: 'Начать игру', action: :play_game},
-    {id: 0, title: 'Выйти из игры', action: :exit_game}
+  ACTIONS = [
+    {id: 1, title: 'Пропустить ход', action: :skip},
+    {id: 2, title: 'Добавить карту', action: :take_card},
+    {id: 3, title: 'Вскрыть карты', action: :show}
   ]
 
+  attr_reader :user, :dealer, :bank, :card_deck
+
   def initialize
-    @user = nil
-    @croupiers = []
-    @active_croupier = nil
+    @user = Player.new
+    @dealer = Dealer.new
+    @bank = 0
+    @card_deck = []
   end
 
   def start
     get_user_name!
-    show_menu
+    start_game
   end
 
   def get_user_name!
     puts 'Как тебя зовут?'
-    @user = Player.new(gets.chomp.downcase)
+    user.name = gets.chomp.capitalize
   end
-  
-  def show_menu
-    loop do 
-      MENU.each {|i| puts "#{i[:id]} - #{i[:title]}"}
-      user_choise = gets.chomp.to_i
-      MENU.each {|i| user_choise = send(i[:action]) if i[:id] == user_choise}
-      break if user_choise == 'exit'
-    rescue RuntimeError => e     
-      puts e.message
+
+  def start_game
+    until dealer.chips == 0 || user.chips ==0
+      beginning_game
+      until user.hand.length == 3 && dealer.hand.length == 3 
+        break if user_action.include?('show')
+        dealer_action
+      end
+      break if proccess_result
     end
-  end
-  
-  def create_croupier
-    puts "Крупье успешно создан"
-    @croupiers << Croupier.new
-  end
-
-  def select_table
-    raise 'Сначало нужно создать крупье' if @croupiers.empty?
-
-    @croupiers.each_with_index do |croupier, index|
-      puts "Стол №#{index + 1} (Крупье #{croupier.rating[:wins]}/#{croupier.rating[:loses]})"
-    end
-    puts "#{@user.name.capitalize}, какой стол выбираешь?"
-    @active_croupier = (@croupiers[gets.chomp.to_i - 1])
-    @user.choise_croupier(@active_croupier)
-  end
-
-  def play_game
-    raise 'Для начала игры нужно выбрать стол' if @user.active_croupier.nil?
-
-    beginning_game
-    intermediate_status
-    loop do
-      break if action_user || @user.hand_value.empty?
-      intermediate_status
-    end
-    action_croupier if !@user.hand_value.empty?
-    proccess_result
-    end_game
   end
 
   def beginning_game
-    puts "#{@user.name}, сделайте вашу ставку (Баланс фишек: #{@user.chips})"
-
-    @user.place_bet(gets.chomp.to_i)
-    @active_croupier.get_new_deck!
-    2.times {@active_croupier.give_card(@user)}
-    @active_croupier.give_card(@active_croupier)
-  end
-
-  def intermediate_status
-    puts "Ваши карты:"
-    @user.hand.each {|card| print "#{card[:kind].capitalize}  "}
-    puts "(Всего очков: #{@user.hand_value[0]})"
-    puts "Карты крупье:"
-    if @active_croupier.hand.length > 1
-      @active_croupier.hand.each {|card| print "#{card[:kind].capitalize} "}
-      puts "(Всего очков: #{@active_croupier.hand_value})"
-    else
-      print "#{@active_croupier.hand[0][:kind].capitalize}  *  "
-      puts "(Всего очков: #{@active_croupier.hand_value})"
+    user.return_cards
+    dealer.return_cards
+    @bank = 0
+    @card_deck = CardDeck.new
+    2.times do
+      user.take_card(card_deck)
+      dealer.take_card(card_deck)
     end
-  end
-
-  def action_user
-    puts "1 - Взять карту\n2 - Остановиться"
-    user_choise = gets.chomp.to_i
-    if user_choise == 1
-      @active_croupier.give_card(@user)
-      puts "Ваша карта - #{@user.hand.last[:kind]}"
-    end
-    user_choise == 2 ? true : false
+    user.place_bet(bank)
+    dealer.place_bet(bank)
+    intermediate_status
   end
   
-  def action_croupier
-    while @active_croupier.hand_value.max < @user.hand_value.max
-      @active_croupier.give_card(@active_croupier)
-      puts "Крупье вытащил #{active_croupier.hand.last[:kind]}" if @active_croupier.hand.length > 2
-      sleep(2)
-      intermediate_status
-      sleep(1)
-      return if @active_croupier.hand_value.max.nil?
+  def intermediate_status
+    puts "Ваши карты:"
+    user.hand.each {|card| print "#{card[:kind].capitalize} "}
+    puts "(Сумма очков: #{user.hand_value})"
+    puts "Карты диллера:"
+    dealer.hand.length.times {print "*  "}
+  end
+
+  def user_action
+    return user.show if user.hand.length > 2
+    puts "\nВыберите действие:"
+    ACTIONS.each {|action| puts "#{action[:id]} - #{action[:title]}"}
+    user_choise = gets.chomp.to_i
+    ACTIONS.map {|action| send(action[:action]) if user_choise == action[:id]}.compact
+  end
+
+  def skip
+  end
+
+  def show
+    user.show
+  end
+
+  def take_card
+    user.take_card(card_deck)
+  end
+
+  def dealer_action
+    if dealer.hand_value < 17 && dealer.hand.length < 3
+      dealer.take_card(card_deck)
+      puts 'Диллер добавил карту'
+    else
+      dealer.skip
+      puts 'Диллер пропустил ход'
     end
+    intermediate_status
   end
 
   def proccess_result
-    return user_lose if @user.hand_value.max.nil?
-    return user_win if @active_croupier.hand_value.max.nil?
-    if @user.hand_value.max > @active_croupier.hand_value.max
+    puts "Ваши карты:"
+    user.hand.each {|card| print "#{card[:kind].capitalize} "}
+    puts "(Сумма очков: #{user.hand_value})"
+
+    puts "Карты диллера:"
+    dealer.hand.each {|card| print "#{card[:kind].capitalize} "}
+    puts "(Сумма очков: #{dealer.hand_value})"
+
+    if user.hand_value < 22 && (user.hand_value > dealer.hand_value || dealer.hand_value > 21)
       user_win
-    elsif @user.hand_value.max < @active_croupier.hand_value.max
+    elsif dealer.hand_value < 22 && (user.hand_value < dealer.hand_value || user.hand_value > 21)
       user_lose
     else
       both
     end
+    puts "Повторим?\n1 - Да\n2 - Выйти из игры"
+    gets.chomp.to_i == 2 ? true : false
   end
 
   def user_win
     puts 'Вы победили!'
-    @user.chips += @active_croupier.bank
-    @active_croupier.rating[:loses] += 1
+    user.chips += bank
   end
 
   def user_lose
-    puts "Вы проиграли :("
-    active_croupier.rating[:wins] += 1
+    puts 'Вы проиграли :('
+    dealer.chips += bank
   end
 
   def both
     puts 'Ничья!'
-    @user.chips += @active_croupier.bank / 2
+    user.chips += bank / 2
+    dealer.chips += bank / 2
   end
-  
-  def end_game
-    @active_croupier.clear_bank!
-    @user.hand = []
-    @active_croupier.hand = []
-  end
-  
-  def exit_game
-    'exit'
-  end
-
 end
